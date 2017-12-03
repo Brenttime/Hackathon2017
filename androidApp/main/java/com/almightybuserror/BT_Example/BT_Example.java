@@ -2,7 +2,7 @@ package com.almightybuserror.BT_Example;
 
 import java.io.DataInputStream;
 import java.io.IOException;
-import java.io.InputStream;
+import java.util.ArrayList;
 import java.util.UUID;
 
 import android.app.Activity;
@@ -14,15 +14,20 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.database.Cursor;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Vibrator;
+import android.provider.ContactsContract;
 import android.telephony.SmsManager;
 import android.util.Log;
 import android.view.View;
 import android.view.View.OnClickListener;
+import android.widget.ArrayAdapter;
 import android.widget.Button;
+import android.widget.ListView;
 import android.widget.TextView;
+import android.widget.Toast;
 
 
 /*
@@ -64,6 +69,7 @@ public class BT_Example extends Activity implements OnClickListener {
 	 */
 	private String defaultUUID = "00001101-0000-1000-8000-00805F9B34FB";
 
+    private ListView contactList;
 	/**
 	 * Default bluetooth adapter on the device.
 	 */
@@ -140,6 +146,13 @@ public class BT_Example extends Activity implements OnClickListener {
 			server = new AcceptThread();
 			server.start();
 
+            contactList = (ListView) findViewById(R.id.list);
+
+            //Always Import contacts on startup
+            if(contactList.getCount() == 0) {
+                importContacts();
+            }
+
 			btn.setEnabled(false);
 
 			((Button) this.findViewById(R.id.btn_stop_server)).setEnabled(true);
@@ -184,7 +197,36 @@ public class BT_Example extends Activity implements OnClickListener {
 		if(mBluetoothAdapter.getName().startsWith(PREFIX))
 			mBluetoothAdapter.setName(mBluetoothAdapter.getName().substring(PREFIX.length()));
 	}
-	
+
+    /* USED LATER TO SEND CONTACTS */
+    public void importContacts()
+    {
+
+        ArrayList<String> contact = new ArrayList<String>();
+
+        Cursor phones = getContentResolver().query(ContactsContract.CommonDataKinds.Phone.CONTENT_URI, null,null,null, null);
+        while (phones.moveToNext())
+        {
+            String name=phones.getString(phones.getColumnIndex(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME));
+            String phoneNumber = phones.getString(phones.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER));
+
+            //Add the contact name and number with a delim
+            contact.add(name + ", " + phoneNumber);
+
+            Toast.makeText(getApplicationContext(),name, Toast.LENGTH_LONG).show();
+        }
+        phones.close();
+
+
+        ArrayAdapter<String> arrayAdapter = new ArrayAdapter<String>( this, android.R.layout.simple_list_item_1, contact );
+        contactList.setAdapter(arrayAdapter);
+    }
+
+    public void sendContactsToDevice()
+    {
+
+    }
+
 	/**
 	 * Sets the interface button handlers.
 	 */
@@ -244,8 +286,10 @@ public class BT_Example extends Activity implements OnClickListener {
 			mServerSocket = tmp;
 		}
 
-		public void run() {
-			BluetoothSocket socket = null;
+		public void run()
+        {
+
+		    BluetoothSocket socket = null;
 
 			try {
 				Log.i(ACCEPT_TAG, "Listening for a connection...");
@@ -253,65 +297,59 @@ public class BT_Example extends Activity implements OnClickListener {
 				socket = mServerSocket.accept();
 				Log.i(ACCEPT_TAG, "Connected to " + socket.getRemoteDevice().getName());
 
-
 				// Read the incoming string.
 				String buffer = "";
 				DataInputStream in;
 				Intent intentToGetMessage = new Intent(MESSAGE_RECEIVED_INTENT);
-				SmsManager sms = SmsManager.getDefault();;
 
-				//while (true) {
+                // If a connection was accepted
+                if (socket != null) {
 
-					// If a connection was accepted
-					if (socket != null) {
+                    // Do work to manage the connection (in a separate thread)
+                    try
+                    {
+                        String lastInput = "";
 
-						// Do work to manage the connection (in a separate thread)
-						try
-						{
-							String lastInput = "";
+                        //Only allows 10 messages - for testing
+                        for(int i =0; i < 10; i++) {
 
-							//Only allows 5 messages
-							for(int i =0; i < 10; i++) {
+                            //Keep looking for input until something doesn't equal the last input -- dupe messages
+                            while(buffer.equals(lastInput))
+                            {
+                                //input
+                                in = new DataInputStream(socket.getInputStream());
+                                //input to string
+                                buffer = in.readUTF();
+                            }
 
-								while(buffer.equals(lastInput))
-								{
-									in = new DataInputStream(socket.getInputStream());
+                            //Leave the Loop because end was sent
+                            if(buffer.contains("end"))
+                            {
+                                break;
+                            }
 
-									buffer = in.readUTF();
+                            lastInput = buffer;
 
-								}
+                            //Send an SMS -- 16107643555 (Joe)
+                            sendSMS("5708621822", String.format("%s From: %s", buffer, socket.getRemoteDevice().getName()));
+                        }
+                    }
+                    catch (IOException e)
+                    {
+                        Log.e(ACCEPT_TAG, "Error obtaining InputStream from socket");
+                        e.printStackTrace();
+                    }
+                }
 
-								//Leave the Loop
-								if(buffer.contains("end"))
-								{
-									break;
-								}
-
-								lastInput = buffer;
-
-								//Send an SMS
-								sms.sendTextMessage("16107643555", null, String.format("%s From: %s", buffer, socket.getRemoteDevice().getName()), null, null);
-
-								//in = new DataInputStream((DataInputStream) "test");
-							}
-						}
-						catch (IOException e)
-						{
-							Log.e(ACCEPT_TAG, "Error obtaining InputStream from socket");
-							e.printStackTrace();
-						}
-					}
-					intentToGetMessage.putExtra("Message", String.format("%sn From: %s", buffer, socket.getRemoteDevice().getName()));
-					getBaseContext().sendBroadcast(intentToGetMessage);
-				//} // end while
-
-
-
+                //Notification in App
+                intentToGetMessage.putExtra("Message", String.format("%s From: %s", buffer, socket.getRemoteDevice().getName()));
+                getBaseContext().sendBroadcast(intentToGetMessage);
 			}
 			catch (IOException e) {}
 			finally
 			{
 				try{
+				    //Close Socket
 					mServerSocket.close();
 				}
 				catch (IOException e) {}
@@ -324,6 +362,14 @@ public class BT_Example extends Activity implements OnClickListener {
 				mServerSocket.close();
 			} catch (IOException e) { }
 		}
+
+		public void sendSMS(String phoneNumber, String message)
+        {
+            SmsManager sms = SmsManager.getDefault();;
+            sms.sendTextMessage(phoneNumber, null, message, null, null);
+        }
+
+
 	}
 	
 	class NotificationCenter extends BroadcastReceiver {
